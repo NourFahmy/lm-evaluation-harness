@@ -473,6 +473,22 @@ def evaluate(
 
     # get lists of group hierarchy and each type of request
     eval_tasks = get_task_list(task_dict)
+
+    # SHORT‐TERM WORKAROUND: exclude the two broken BigBench subtasks
+    exclude = {
+        "bigbench_cause_and_effect_generate_until",
+        "bigbench_misconceptions_russian_generate_until",
+        "bigbench_simple_arithmetic_json_multiple_choice_generate_until"
+    }
+    filtered = []
+    for t in eval_tasks:
+        if t.task_name in exclude:
+            eval_logger.warning(f"Excluding {t.task_name} (known empty‐ctx bug)")
+            continue
+        filtered.append(t)
+    eval_tasks = filtered
+
+
     if not log_samples:
         if not all(
             "bypass" not in getattr(task_output.task, "_metric_fn_list", {}).keys()
@@ -553,6 +569,21 @@ def evaluate(
             # todo: may not account for padding in cases like SquadV2 which has multiple req types
             padding_requests[reqtype] += numpad
 
+    # TODO NOUR: potentially remove
+    # drop any task that ended up with no built Instances
+    new_eval_tasks = []
+    new_limits     = []
+    for task_output, limit in zip(eval_tasks, limits):
+        if not task_output.task.instances:
+            eval_logger.warning(
+                f"Skipping {task_output.task_name}: no instances after build_all_requests"
+            )
+            continue
+        new_eval_tasks.append(task_output)
+        new_limits.append(limit)
+    eval_tasks = new_eval_tasks
+    limits     = new_limits
+
     ### Run LM on inputs, get all outputs ###
     # execute each type of request
     for reqtype, reqs in requests.items():
@@ -583,6 +614,9 @@ def evaluate(
     for task_output, limit in zip(eval_tasks, limits):
         task = task_output.task
         task.apply_filters()
+        if len(task.instances) == 0:
+          eval_logger.warning(f"Skipping postprocessing for {task_output.task_name}: no instances after filtering")
+          continue
 
         ### Collect values of metrics on all datapoints ###
         # # unpack results and sort back in order and return control to Task
@@ -613,6 +647,13 @@ def evaluate(
                 else:
                     doc_id_true = doc_id
                 requests = instances_by_doc_id[doc_id]
+                # debug: make sure all references are strings
+                raw_ref = task.doc_to_target(doc)
+                if not isinstance(raw_ref, str):
+                    eval_logger.warning(
+                        f"[empty‐ctx bug] Task {task_output.task_name} doc_id={doc_id} "
+                        f"returned non‐string target: {raw_ref!r}"
+                    )
                 metrics = task.process_results(
                     doc, [req.filtered_resps[filter_key] for req in requests]
                 )
@@ -691,10 +732,13 @@ def evaluate(
         ) = consolidate_results(eval_tasks)
 
         ### Calculate group metrics ###
+        # default to no group-table if there are no results
+        show_group_table = False
         if bool(results):
             results, versions, show_group_table, *_ = consolidate_group_results(
                 results, versions, task_dict
             )
+
 
         results_agg, group_agg = prepare_print_tasks(task_dict, results)
         subtask_list = get_subtask_list(task_dict)
@@ -724,28 +768,28 @@ def evaluate(
                 higher_is_better[group] = _higher_is_better
 
         results_dict = {
-            "results": dict(results_agg.items()),
-            **(
-                {"groups": dict(group_agg.items())}
-                if (bool(group_agg) & show_group_table)
-                else {}
-            ),
-            "group_subtasks": dict(reversed(subtask_list.items())),
-            "configs": dict(sorted(configs.items())),
-            "versions": dict(sorted(versions.items())),
-            "n-shot": dict(sorted(num_fewshot.items())),
-            "higher_is_better": dict(sorted(higher_is_better.items())),
-            "n-samples": {
-                task_output.task_name: {
-                    "original": len(task_output.task.eval_docs),
-                    "effective": min(
-                        limit if limit else len(task_output.task.eval_docs),
-                        len(task_output.task.eval_docs),
-                    ),
-                }
-                for task_output, limit in zip(eval_tasks, limits)
-            },
-        }
+          "results": dict(results_agg.items()),
+          **(
+              {"groups": dict(group_agg.items())}
+              if bool(group_agg) and show_group_table
+              else {}
+          ),
+          "group_subtasks": dict(reversed(subtask_list.items())),
+          "configs": dict(sorted(configs.items())),
+          "versions": dict(sorted(versions.items())),
+          "n-shot": dict(sorted(num_fewshot.items())),
+          "higher_is_better": dict(sorted(higher_is_better.items())),
+          "n-samples": {
+              task_output.task_name: {
+                  "original": len(task_output.task.eval_docs),
+                  "effective": min(
+                      limit if limit else len(task_output.task.eval_docs),
+                      len(task_output.task.eval_docs),
+                  ),
+              }
+              for task_output, limit in zip(eval_tasks, limits)
+          },
+      }
         if log_samples:
             results_dict["samples"] = dict(samples)
 

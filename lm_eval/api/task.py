@@ -449,6 +449,12 @@ class Task(abc.ABC):
             )
         )
 
+        #TODO NOUR: remove
+        for doc_id, doc in doc_id_docs[:5]:
+          txt = self.doc_to_text(doc)
+          if not isinstance(txt, str) or not txt.strip():
+              eval_logger.error(f"[{self.config.task}] doc_to_text returned empty for doc_id={doc_id}.  Check your doc_to_text/template.")
+
         num_docs = len(doc_id_docs)
 
         for doc_id, doc in tqdm(
@@ -465,6 +471,40 @@ class Task(abc.ABC):
                 chat_template,
                 gen_prefix=self.doc_to_prefix(doc),
             )
+
+            # 1) build your normal prompt
+            fewshot_ctx = self.fewshot_context(
+                doc,
+                0 if self.config.num_fewshot is None else self.config.num_fewshot,
+                system_instruction,
+                apply_chat_template,
+                fewshot_as_multiturn,
+                chat_template,
+                gen_prefix=self.doc_to_prefix(doc),
+            )
+
+            # 2) if that came back empty but there's a non-empty target, fall back to it
+            if not (isinstance(fewshot_ctx, str) and fewshot_ctx.strip()):
+                if "targets" in doc and doc["targets"]:
+                    fallback = doc["targets"][0]
+                    eval_logger.warning(
+                        f"[{self.config.task}] empty inputs ➞ falling back to first target: {fallback!r}"
+                    )
+                    fewshot_ctx = fallback
+
+            # 3) still empty? skip this doc entirely
+            if not isinstance(fewshot_ctx, str) or not fewshot_ctx.strip():
+                eval_logger.info(
+                    f"[{self.config.task}] Skipping doc_id={doc_id}: no usable prompt"
+                )
+                continue
+
+
+            if not fewshot_ctx.strip():
+              eval_logger.warning(
+                  f"[{self.config.task}] empty ctx for doc_id={doc_id}; "
+                  f"config.doc_to_text={self.config.doc_to_text!r}; doc={doc}"
+              )
 
             # TODO: we should override self.config.repeats if doing greedy gen so users don't waste time+compute
             inst = self.construct_requests(
@@ -493,7 +533,11 @@ class Task(abc.ABC):
         self._instances = flattened_instances
 
         if len(self._instances) == 0:
-            raise ValueError("task.build_requests() did not find any docs!")
+            eval_logger.warning(
+                f"[{self.config.task}] build_all_requests: no docs found → skipping this task"
+            )
+            # leave self._instances empty so evaluate() can skip it
+            return
 
         if cache_requests and (not cached_instances or rewrite_requests_cache):
             save_to_cache(file_name=cache_key, obj=instances)
@@ -861,6 +905,16 @@ class ConfigurableTask(Task):
                     self._higher_is_better[metric_name] = is_higher_better(metric_name)
 
         self.download(self.config.dataset_kwargs)
+        try:
+            self.download(self.config.dataset_kwargs)
+        except ValueError as e:
+            # e.g. “Instruction 'train' corresponds to no data!”
+            eval_logger.warning(
+                f"Task {self.config.task!r} download failed ({e}), marking as empty."
+            )
+            # build an empty default split so eval_docs == []
+            from datasets import Dataset, DatasetDict
+            self.dataset = DatasetDict({"default": Dataset.from_dict({})})
         self._training_docs = None
         self._fewshot_docs = None
 
@@ -919,80 +973,108 @@ class ConfigurableTask(Task):
 
         self.task_docs = self.eval_docs
 
+        # TODO NOUR: remove debug
+        if len(self.eval_docs) == 0:
+          eval_logger.error(f"[{self.config.task}] no examples found in split “{self.config.validation_split or self.config.test_split}”.  Skipping this task.")
+
         # Test One Doc
         self.features = list(self.task_docs.features.keys())
         self.multiple_input = 0
         self.multiple_target = 0
-        test_doc = self.task_docs[0]
-        test_text = self.doc_to_text(test_doc)
-        test_target = self.doc_to_target(test_doc)
+        # assign whatever eval_docs (could now be empty)
+        self.task_docs = self.eval_docs
+        if len(self.task_docs) == 0:
+            # skip the “one‐doc” sanity checks entirely
+            self.features = []
+            self.multiple_input = 0
+            self.multiple_target = 0
+        else:
+            # Test One Doc (only if we have at least one example)
+            self.features = list(self.task_docs.features.keys())
+            self.multiple_input = 0
+            self.multiple_target = 0
+            test_doc = self.task_docs[0]
+            test_text = self.doc_to_text(test_doc)
+            test_target = self.doc_to_target(test_doc)
 
-        if self.config.doc_to_choice is not None:
-            test_choice = self.doc_to_choice(test_doc)
-            if not isinstance(test_choice, list):
-                eval_logger.error("doc_to_choice must return list")
+            if self.config.doc_to_choice is not None:
+                test_choice = self.doc_to_choice(test_doc)
+                if not isinstance(test_choice, list):
+                    eval_logger.error("doc_to_choice must return list")
+                else:
+                    num_choice = len(test_choice)
+
+                if isinstance(test_text, int):
+                    eval_logger.debug(
+                        "doc_to_text returned an int. Assuming multiple inputs."
+                    )
+                    self.multiple_input = num_choice
             else:
-                num_choice = len(test_choice)
+                test_choice = None
 
-            if isinstance(test_text, int):
+            if isinstance(test_target, list):
                 eval_logger.debug(
-                    "doc_to_text returned an int. Assuming multiple inputs."
+                    "doc_to_target returned a list. Assuming multiple targets."
                 )
-                self.multiple_input = num_choice
-        else:
-            test_choice = None
-
-        if isinstance(test_target, list):
-            eval_logger.debug(
-                "doc_to_target returned a list. Assuming multiple targets."
-            )
-            self.multiple_target = len(test_target)
-        else:
-            if (isinstance(test_target, int)) and (test_choice is not None):
-                test_target = test_choice[test_target]
+                self.multiple_target = len(test_target)
             else:
-                test_target = str(test_target)
+                if (isinstance(test_target, int)) and (test_choice is not None):
+                    test_target = test_choice[test_target]
+                else:
+                    test_target = str(test_target)
 
-        if test_choice is not None:
-            check_choices = test_choice
-        else:
-            check_choices = [test_target]
-        if self.config.doc_to_choice is not None:
-            for choice in check_choices:
-                choice_has_whitespace = True if choice[0].isspace() else False
-                delimiter_has_whitespace = (
-                    True
-                    if self.config.target_delimiter.rstrip()
-                    != self.config.target_delimiter
-                    else False
-                )
+            if test_choice is not None:
+                check_choices = test_choice
+            else:
+                check_choices = [test_target]
+            if self.config.doc_to_choice is not None:
+                for choice in check_choices:
+                    choice_has_whitespace = True if choice[0].isspace() else False
+                    delimiter_has_whitespace = (
+                        True
+                        if self.config.target_delimiter.rstrip()
+                        != self.config.target_delimiter
+                        else False
+                    )
 
-                if delimiter_has_whitespace and choice_has_whitespace:
-                    eval_logger.debug(
-                        f'Both target_delimiter "{self.config.target_delimiter}" and target choice: "{choice}" have whitespace'
-                    )
-                elif (not delimiter_has_whitespace) and (not choice_has_whitespace):
-                    eval_logger.debug(
-                        f'Both target_delimiter "{self.config.target_delimiter}" and target choice: "{choice}" do not have whitespace, ignore if the language you are evaluating on does not require/use whitespace'
-                    )
+                    if delimiter_has_whitespace and choice_has_whitespace:
+                        eval_logger.debug(
+                            f'Both target_delimiter "{self.config.target_delimiter}" and target choice: "{choice}" have whitespace'
+                        )
+                    elif (not delimiter_has_whitespace) and (not choice_has_whitespace):
+                        eval_logger.debug(
+                            f'Both target_delimiter "{self.config.target_delimiter}" and target choice: "{choice}" do not have whitespace, ignore if the language you are evaluating on does not require/use whitespace'
+                        )
 
     def download(
         self, dataset_kwargs: Optional[Dict[str, Any]] = None, **kwargs
     ) -> None:
-        if isinstance(self.config.custom_dataset, Callable):
+        """Download dataset, but if HF raises ValueError about a missing split, turn it into an empty default split."""
+        try:
+            if isinstance(self.config.custom_dataset, Callable):
+                eval_logger.warning(
+                    f"{self.config.task}: Custom kwargs can be passed to `--metadata`…"
+                )
+                self.dataset = self.config.custom_dataset(
+                    **(self.config.metadata or {}),
+                    **(self.config.dataset_kwargs or {}),
+                )
+            else:
+                # <-- this is where load_dataset often errors
+                self.dataset = datasets.load_dataset(
+                    path=self.DATASET_PATH,
+                    name=self.DATASET_NAME,
+                    **(dataset_kwargs or {}),
+                )
+        except ValueError as e:
+            # e.g. “Instruction 'train' corresponds to no data!”
             eval_logger.warning(
-                f"{self.config.task}: Custom kwargs can be passed to `--metadata` in console (as json string) or to the TaskManager."
-                + "\nFor example --metadata='{\"max_seq_lengths\":[4096, 8192]}'. For details see task Readme."
+                f"Task {self.config.task!r} download error ({e}), using empty default split."
             )
-            self.dataset = self.config.custom_dataset(
-                **(self.config.metadata or {}), **(self.config.dataset_kwargs or {})
-            )
-        else:
-            self.dataset = datasets.load_dataset(
-                path=self.DATASET_PATH,
-                name=self.DATASET_NAME,
-                **dataset_kwargs if dataset_kwargs is not None else {},
-            )
+            from datasets import Dataset, DatasetDict
+            # create an empty DatasetDict with a zero‐row "default" split
+            self.dataset = DatasetDict({"default": Dataset.from_dict({})})
+
 
     def has_training_docs(self) -> bool:
         if self.config.training_split is not None:
@@ -1098,37 +1180,20 @@ class ConfigurableTask(Task):
         """Returns a fewshot context string that is made up of a prepended description
         (if provided), the `num_fewshot` number of examples, and an appended prompt example.
 
-        :param doc: str
-            The document as returned from training_docs, validation_docs, or test_docs.
-        :param num_fewshot: int
-            The number of fewshot examples to provide in the returned context string.
-        :param  system_instruction: str
-            System instruction to be applied to the prompt.
-        :param apply_chat_template: bool
-            Whether to apply the chat template to the fewshot context.
-        :param fewshot_as_multiturn: bool
-            Whether to provide the fewshot examples as a multiturn conversation or a single user turn.
-        :param chat_template:
-            callable (from lm.apply_chat_template) that takes in a list[Dict] chat transcript and renders it into a string.
-        :param gen_prefix:
-            String to append after the <|assistant|> token.
-        :returns: str
-            The fewshot context.
+        Debug: logs and checks for valid, non-empty context.
         """
+        # Initialize labeled examples container
         if apply_chat_template:
             labeled_examples = []
         else:
             labeled_examples = ""
 
-        # get task description
-        if description := self.config.description:
-            description = utils.apply_template(self.config.description, doc)
+        # Prepare description
+        description = utils.apply_template(self.config.description, doc) if self.config.description else ""
 
-        # create system prompt based on the provided system instruction and description
+        # Build system prompt
         if system_instruction is not None and description:
-            system_prompt = (
-                f"{system_instruction}{self.sampler.fewshot_delimiter}{description}"
-            )
+            system_prompt = f"{system_instruction}{self.sampler.fewshot_delimiter}{description}"
         elif system_instruction is not None:
             system_prompt = system_instruction
         elif description:
@@ -1136,102 +1201,91 @@ class ConfigurableTask(Task):
         else:
             system_prompt = ""
 
-        # add system prompt if specified
         if system_prompt:
             if apply_chat_template:
                 labeled_examples.append({"role": "system", "content": system_prompt})
             else:
                 labeled_examples = system_prompt
-        # if few-shot - append examples after the system prompt
+
+        # Append few-shot examples if requested
         if num_fewshot > 0:
             if apply_chat_template:
                 labeled_examples.extend(
-                    self.sampler.get_chat_context(
-                        doc,
-                        num_fewshot,
-                        fewshot_as_multiturn,
-                        gen_prefix=gen_prefix,
-                    )
+                    self.sampler.get_chat_context(doc, num_fewshot, fewshot_as_multiturn, gen_prefix=gen_prefix)
                 )
             else:
-                labeled_examples += self.sampler.get_context(
-                    doc, num_fewshot, gen_prefix=gen_prefix
-                )
+                labeled_examples += self.sampler.get_context(doc, num_fewshot, gen_prefix=gen_prefix)
 
+        # Get the actual prompt text for this document
         example = self.doc_to_text(doc)
-        if apply_chat_template:
+
+        # Non-chat branch: build and validate single-context string
+        if not apply_chat_template:
+            prefix = (self.config.target_delimiter + gen_prefix) if gen_prefix else ""
             if self.multiple_input:
-                # TODO: append prefill?
-                if not labeled_examples:
-                    return ""
-                return chat_template(labeled_examples)
-            if isinstance(example, str):
-                self.append_target_question(
-                    labeled_examples,
-                    example,
-                    fewshot_as_multiturn,
-                    gen_prefix=gen_prefix,
-                )
-            # for loglikelihood create a list of questions with appended choices
-            elif isinstance(example, list):
-                labeled_examples_list = []
-                # copy chat history for each example and append the answer
-                for ex in example:
-                    chat = deepcopy(labeled_examples)
-                    self.append_target_question(
-                        chat,
-                        ex,
-                        fewshot_as_multiturn,
-                        gen_prefix=gen_prefix,
-                    )
-                    # TODO: append prefill?
-                    labeled_examples_list.append(
-                        chat_template(
-                            chat,
-                            add_generation_prompt=False if gen_prefix else True,
-                        )
-                    )
-                return labeled_examples_list
-            # if example is an integer, append the choice or convert to string
-            elif isinstance(example, int):
-                if self.config.doc_to_choice is not None:
-                    choices = self.doc_to_choice(doc)
-                    self.append_target_question(
-                        labeled_examples,
-                        choices[example],
-                        fewshot_as_multiturn,
-                        gen_prefix=gen_prefix,
-                    )
+                ctx = labeled_examples
+            else:
+                if isinstance(example, str):
+                    ctx = labeled_examples + example + prefix
+                elif isinstance(example, list):
+                    # list of contexts
+                    ctx_list = [labeled_examples + ex + prefix for ex in example]
+                    # Debug: check each element
+                    for idx, c in enumerate(ctx_list):
+                        if not isinstance(c, str):
+                            raise TypeError(f"[{self.config.task}] fewshot_context element not str: {type(c)}")
+                        if not c.strip():
+                            eval_logger.warning(f"[{self.config.task}] fewshot_context empty for doc element index={idx}")
+                    return ctx_list
+                elif isinstance(example, int):
+                    choice = (self.doc_to_choice(doc)[example] if self.config.doc_to_choice else str(example))
+                    ctx = labeled_examples + choice + prefix
                 else:
-                    self.append_target_question(
-                        labeled_examples,
-                        str(example),
-                        fewshot_as_multiturn,
-                        gen_prefix=gen_prefix,
-                    )
-                # return lm.apply_chat_template(labeled_examples)
-            return chat_template(
-                labeled_examples,
-                add_generation_prompt=False if gen_prefix else True,
-            )
+                    raise TypeError(f"[{self.config.task}] unexpected example type: {type(example)}")
+
+            # Debug: validate final context string
+            if not isinstance(ctx, str):
+                raise TypeError(f"[{self.config.task}] fewshot_context must return str but got {type(ctx)}")
+            if not ctx.strip():
+                eval_logger.warning(f"[{self.config.task}] fewshot_context returned empty string for doc")
+            return ctx
+
+        # Chat branch: delegate to chat_template and validate
+        if self.multiple_input:
+            if not labeled_examples:
+                eval_logger.warning(f"[{self.config.task}] chat-mode fewshot_context empty for multiple_input doc")
+                return ""
+            return chat_template(labeled_examples)
+
+        # Append question for chat
+        if isinstance(example, str):
+            self.append_target_question(labeled_examples, example, fewshot_as_multiturn, gen_prefix=gen_prefix)
+            result = chat_template(labeled_examples, add_generation_prompt=not gen_prefix)
+        elif isinstance(example, list):
+            result = []
+            for ex in example:
+                chat = deepcopy(labeled_examples)
+                self.append_target_question(chat, ex, fewshot_as_multiturn, gen_prefix=gen_prefix)
+                result.append(chat_template(chat, add_generation_prompt=not gen_prefix))
+        elif isinstance(example, int):
+            choice = (self.doc_to_choice(doc)[example] if self.config.doc_to_choice else str(example))
+            self.append_target_question(labeled_examples, choice, fewshot_as_multiturn, gen_prefix=gen_prefix)
+            result = chat_template(labeled_examples, add_generation_prompt=not gen_prefix)
         else:
-            prefix = (
-                self.config.target_delimiter + gen_prefix
-                if gen_prefix is not None
-                else ""
-            )
-            if self.multiple_input:
-                return labeled_examples
-            if isinstance(example, str):
-                return labeled_examples + example + prefix
-            elif isinstance(example, list):
-                return [labeled_examples + ex + prefix for ex in example]
-            elif isinstance(example, int):
-                if self.config.doc_to_choice is not None:
-                    choices = self.doc_to_choice(doc)
-                    return labeled_examples + choices[example] + prefix
-                else:
-                    return labeled_examples + str(example) + prefix
+            raise TypeError(f"[{self.config.task}] unexpected example type in chat branch: {type(example)}")
+
+        # Debug for chat result
+        if isinstance(result, str):
+            if not result.strip():
+                eval_logger.warning(f"[{self.config.task}] chat-mode fewshot_context returned empty string for doc")
+        elif isinstance(result, list):
+            for idx, r in enumerate(result):
+                if not isinstance(r, str):
+                    raise TypeError(f"[{self.config.task}] chat-mode fewshot_context element not str: {type(r)}")
+                if not r.strip():
+                    eval_logger.warning(f"[{self.config.task}] chat-mode fewshot_context empty at index={idx}")
+        return result
+
 
     def apply_filters(self) -> Optional[List[Instance]]:
         """Iterates over FilterEnsembles and applies them to instances"""
@@ -1489,6 +1543,10 @@ class ConfigurableTask(Task):
                 arguments.extend(aux_arguments)
 
         elif self.OUTPUT_TYPE == "generate_until":
+            # TODO NOUR: remove
+            if "until" not in self.config.generation_kwargs or not self.config.generation_kwargs["until"]:
+              raise ValueError(f"[{self.config.task}] generation_kwargs['until'] must be set for generate_until tasks")
+            ####
             arguments = (ctx, deepcopy(self.config.generation_kwargs))
 
         multimodal_arg = {}

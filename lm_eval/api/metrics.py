@@ -194,6 +194,14 @@ def acc_mutual_info_fn(items):  # This is a passthrough function
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import logging
+import numpy as np
+import re
+import string
+
+# existing logger in metrics.py
+eval_logger = logging.getLogger(__name__)
+
 def exact_match_hf_evaluate(
     predictions,
     references,
@@ -202,6 +210,7 @@ def exact_match_hf_evaluate(
     ignore_punctuation=False,
     ignore_numbers=False,
 ):
+    # Convert to numpy arrays
     if regexes_to_ignore is not None:
         for s in regexes_to_ignore:
             predictions = np.array([re.sub(s, "", x) for x in predictions])
@@ -210,23 +219,44 @@ def exact_match_hf_evaluate(
         predictions = np.asarray(predictions)
         references = np.asarray(references)
 
+    # **NEW**: coerce everything to string so np.char.translate won't fail
+    predictions = predictions.astype(str)
+    references  = references.astype(str)
+
+    print(f"[exact_match] initial predictions: {predictions!r}")
+    print(f"[exact_match] initial references:  {references!r}")
+
     if ignore_case:
         predictions = np.char.lower(predictions)
         references = np.char.lower(references)
+        print(f"[exact_match] after ignore_case, predictions: {predictions!r}")
+        print(f"[exact_match] after ignore_case, references:  {references!r}")
 
     if ignore_punctuation:
         repl_table = string.punctuation.maketrans("", "", string.punctuation)
         predictions = np.char.translate(predictions, table=repl_table)
-        references = np.char.translate(references, table=repl_table)
+        print(f"[exact_match] after translate-punct, predictions: {predictions!r}")
+        try:
+            references = np.char.translate(references, table=repl_table)
+            print(f"[exact_match] after translate-punct, references:  {references!r}")
+        except Exception as e:
+            print(f"[exact_match] translate on references failed: {references!r}")
+            raise
 
     if ignore_numbers:
         repl_table = string.digits.maketrans("", "", string.digits)
         predictions = np.char.translate(predictions, table=repl_table)
         references = np.char.translate(references, table=repl_table)
+        print(f"[exact_match] after translate-numbers, predictions: {predictions!r}")
+        print(f"[exact_match] after translate-numbers, references:  {references!r}")
 
+    # Final exact match comparison
     score_list = predictions == references
+    eval_logger.debug(f"[exact_match] comparison result (bool array): {score_list!r}")
+    result = {"exact_match": float(np.mean(score_list))}
+    print(f"[exact_match] final score: {result}")
+    return result
 
-    return {"exact_match": np.mean(score_list)}
 
 
 ###
