@@ -461,8 +461,15 @@ class Task(abc.ABC):
             doc_id_docs,
             total=num_docs,
         ):
-            # sample fewshot context #TODO: need to offset doc_id by rank now!
-            fewshot_ctx = self.fewshot_context(
+            eval_logger.info(
+                  f"BANANAS!!"
+              )
+            eval_logger.info(
+                  f"[{self.config.task}] about to build prompt for doc_id={doc_id}. raw doc: {doc!r}"
+              )
+
+            # 1) build your normal prompt (could be str or JsonChatStr)
+            ctx_obj = self.fewshot_context(
                 doc,
                 0 if self.config.num_fewshot is None else self.config.num_fewshot,
                 system_instruction,
@@ -471,40 +478,36 @@ class Task(abc.ABC):
                 chat_template,
                 gen_prefix=self.doc_to_prefix(doc),
             )
+            eval_logger.info(f"[{self.config.task}] FEW SHOT CONTEXT (raw): {ctx_obj!r}")
 
-            # 1) build your normal prompt
-            fewshot_ctx = self.fewshot_context(
-                doc,
-                0 if self.config.num_fewshot is None else self.config.num_fewshot,
-                system_instruction,
-                apply_chat_template,
-                fewshot_as_multiturn,
-                chat_template,
-                gen_prefix=self.doc_to_prefix(doc),
-            )
+            # 2) extract a plain‐text string for emptiness checks
+            if isinstance(ctx_obj, str):
+                raw_text = ctx_obj
+            elif hasattr(ctx_obj, "prompt"):
+                raw_text = ctx_obj.prompt
+            else:
+                raw_text = ""
+            raw_text = raw_text.strip()
 
-            # 2) if that came back empty but there's a non-empty target, fall back to it
-            if not (isinstance(fewshot_ctx, str) and fewshot_ctx.strip()):
-                if "targets" in doc and doc["targets"]:
-                    fallback = doc["targets"][0]
-                    eval_logger.warning(
-                        f"[{self.config.task}] empty inputs ➞ falling back to first target: {fallback!r}"
-                    )
-                    fewshot_ctx = fallback
+            # 3) if empty but we have a non‐empty target, fall back to it
+            if not raw_text and doc.get("targets"):
+                fallback = doc["targets"][0]
+                eval_logger.warning(
+                    f"[{self.config.task}] empty context → falling back to first target: {fallback!r}"
+                )
+                raw_text = fallback.strip()
+                ctx_obj = fallback  # switch context to that string
 
-            # 3) still empty? skip this doc entirely
-            if not isinstance(fewshot_ctx, str) or not fewshot_ctx.strip():
+            # 4) still empty? skip this document
+            if not raw_text:
                 eval_logger.info(
                     f"[{self.config.task}] Skipping doc_id={doc_id}: no usable prompt"
                 )
                 continue
 
+            # 5) finally—use ctx_obj (either the original chat‐object or the fallback string)
+            fewshot_ctx = ctx_obj
 
-            if not fewshot_ctx.strip():
-              eval_logger.warning(
-                  f"[{self.config.task}] empty ctx for doc_id={doc_id}; "
-                  f"config.doc_to_text={self.config.doc_to_text!r}; doc={doc}"
-              )
 
             # TODO: we should override self.config.repeats if doing greedy gen so users don't waste time+compute
             inst = self.construct_requests(
