@@ -473,6 +473,16 @@ def evaluate(
 
     # get lists of group hierarchy and each type of request
     eval_tasks = get_task_list(task_dict)
+    if eval_tasks:
+      # filter out any groups and grab the names
+      subtask_names = [to.task_name for to in eval_tasks if not to.is_group]
+
+      # save to disk
+      with open("subtasks.txt", "w", encoding="utf-8") as f:
+          for name in sorted(subtask_names):
+              f.write(name + "\n")
+
+      print(f"Wrote {len(subtask_names)} subtasks to subtasks.txt")
 
     # SHORT‐TERM WORKAROUND: exclude the two broken BigBench subtasks
     exclude = {

@@ -1064,11 +1064,17 @@ class ConfigurableTask(Task):
                 )
             else:
                 # <-- this is where load_dataset often errors
-                self.dataset = datasets.load_dataset(
-                    path=self.DATASET_PATH,
-                    name=self.DATASET_NAME,
-                    **(dataset_kwargs or {}),
-                )
+                try:
+                  self.dataset = datasets.load_dataset(
+                      path=self.DATASET_PATH,
+                      name=self.DATASET_NAME,
+                      **(dataset_kwargs or {}),
+                  )
+                except Exception as e:
+                  eval_logger.error(f"Task {self.config.task!r} download error ({e})")
+                  from datasets import Dataset, DatasetDict
+                  # create an empty DatasetDict with a zero‐row "default" split
+                  self.dataset = DatasetDict({"default": Dataset.from_dict({})})
         except ValueError as e:
             # e.g. “Instruction 'train' corresponds to no data!”
             eval_logger.warning(
