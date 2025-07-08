@@ -24,6 +24,8 @@ def register_model(*names):
             assert name not in MODEL_REGISTRY, (
                 f"Model named '{name}' conflicts with existing model! Please register with a non-conflicting alias instead."
             )
+            if name == 'goguma-anthropic-model':
+                print('HERE REGISTERED')
 
             MODEL_REGISTRY[name] = cls
         return cls
