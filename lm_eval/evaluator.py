@@ -607,8 +607,43 @@ def evaluate(
             for _ in range(padding_requests[reqtype]):
                 cloned_reqs.extend([req] * req.repeats)
 
+
+        print("=" * 60)
+        print(f"[DEBUG] Running request type: {reqtype}")
+        print(f"[DEBUG] Number of cloned requests: {len(cloned_reqs)}")
+
+        if len(cloned_reqs) > 0:
+            sample_req = cloned_reqs[0]
+            print(f"[DEBUG] Sample request (index 0):")
+            print(f"  doc_id: {getattr(sample_req, 'doc_id', None)}")
+            print(f"  request_type: {sample_req.request_type}")
+            print(f"  args: {sample_req.args}")
+            print(f"  doc: {sample_req.doc}")
+            print(f"  target: {getattr(sample_req, 'target', None)}")
+        else:
+            print("[WARNING] cloned_reqs is empty!")
+
+        print("=" * 60)
+
         # run requests through model
-        resps = getattr(lm, reqtype)(cloned_reqs)
+        # TODO UNHASH
+        #resps = getattr(lm, reqtype)(cloned_reqs)
+
+        try:
+          resps = getattr(lm, reqtype)(cloned_reqs)
+          print(f"[DEBUG] Got {len(resps)} responses from LM")
+
+          for i, (x, req) in enumerate(zip(resps, cloned_reqs)):
+              print(f"[DEBUG] Response {i}: {x}")
+              req.resps.append(x)
+
+              if len(resps) != len(cloned_reqs):
+                  print(f"[WARNING] Length mismatch: {len(resps)} responses vs {len(cloned_reqs)} requests")
+
+        except Exception as e:
+            print(f"[ERROR] Exception during model call: {e}")
+            raise
+
 
         # put responses from model into a list of length K for each request.
         for x, req in zip(resps, cloned_reqs):
