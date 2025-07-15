@@ -5,7 +5,9 @@ dataset_kwargs:
   # num_shots: 0 # TODO: num of shots for `bigbench` HF dataset should be controlled through this, not through the typical methods
   # subtask_name: null
 test_split: default
-doc_to_text: inputs
+doc_to_text: >
+  Solve the following problem. Only write the final answer, without explanation or reasoning.
+  {{inputs}}
 doc_to_target: "{{targets[0]}}"
 generation_kwargs:
   max_gen_toks: 128
@@ -14,5 +16,17 @@ metric_list:
     aggregation: mean
     higher_is_better: true
     ignore_punctuation: true
+  - metric: bleu
+    aggregation: bleu
+    higher_is_better: true
+  - metric: rouge1
+    aggregation: rouge1
+    higher_is_better: true
+  - metric: rouge2
+    aggregation: rouge2
+    higher_is_better: true
+  - metric: rougeL
+    aggregation: rougeL
+    higher_is_better: true
 metadata:
   version: 1.0

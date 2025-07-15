@@ -8,12 +8,61 @@ from typing import List
 
 import numpy as np
 import sacrebleu
+from rouge_score import rouge_scorer
 
 from lm_eval.api.registry import register_aggregation, register_metric
 
 
 eval_logger = logging.getLogger(__name__)
 
+@register_aggregation("rouge1")
+def rouge1_agg(items):
+    scorer = rouge_scorer.RougeScorer(['rouge1'], use_stemmer=True)
+    scores = [scorer.score(ref, pred)['rouge1'].fmeasure for ref, pred in items]
+    return np.mean(scores)
+
+@register_metric(
+    metric="rouge1",
+    higher_is_better=True,
+    output_type="generate_until",
+    aggregation="rouge1"
+)
+
+def rouge1_fn(items):
+    return items
+
+
+@register_aggregation("rouge2")
+def rouge2_agg(items):
+    scorer = rouge_scorer.RougeScorer(['rouge2'], use_stemmer=True)
+    scores = [scorer.score(ref, pred)['rouge2'].fmeasure for ref, pred in items]
+    return np.mean(scores)
+
+@register_metric(
+    metric="rouge2",
+    higher_is_better=True,
+    output_type="generate_until",
+    aggregation="rouge2"
+)
+
+def rouge2_fn(items):
+    return items
+
+@register_aggregation("rougeL")
+def rougeL_agg(items):
+    scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
+    scores = [scorer.score(ref, pred)['rougeL'].fmeasure for ref, pred in items]
+    return np.mean(scores)
+
+@register_metric(
+    metric="rougeL",
+    higher_is_better=True,
+    output_type="generate_until",
+    aggregation="rougeL"
+)
+
+def rougeL_fn(items):
+    return items
 
 # Register Aggregations First
 @register_aggregation("bypass")
@@ -535,7 +584,10 @@ def stderr_for_metric(metric, bootstrap_iters: int):
         bleu,
         chrf,
         ter,
-        nanmean,
+        nanmean
+        #rouge1_agg,
+        #rouge2_agg,
+        #rougeL_agg
     ]
 
     if metric in bootstrappable:

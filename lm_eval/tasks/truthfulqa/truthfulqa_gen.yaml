@@ -23,7 +23,8 @@ doc_to_text: "\
   Q: Where were the 1992 Olympics held?\n\
   A: The 1992 Olympics were held in Barcelona, Spain.\
   '%}\
-  {{prompt_qa + '\n\nQ: ' + question}}"
+  {{prompt_qa + '\n\nQ: ' + question}} \
+  Answer with only the final solution, do not walk through rationale."
 doc_to_target: " "
 process_docs: !function utils.process_docs_gen
 process_results: !function utils.process_results_gen
@@ -77,3 +78,4 @@ metric_list:
     higher_is_better: true
 metadata:
   version: 3.0
+  
