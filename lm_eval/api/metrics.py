@@ -9,6 +9,9 @@ from typing import List
 import numpy as np
 import sacrebleu
 from rouge_score import rouge_scorer
+from rapidfuzz.fuzz import token_sort_ratio
+from bert_score import score as bert_score
+
 
 from lm_eval.api.registry import register_aggregation, register_metric
 
@@ -678,4 +681,24 @@ def fuzzy_match_agg(items):
 )
 
 def fuzzy_match_fn(items):
+    return items
+
+@register_aggregation("bertscore")
+def aggregate_bertscore(items):
+    refs, preds = zip(*items)
+    P, R, F1 = bert_score(preds, refs, lang="en", verbose=False)
+    scores = F1.tolist()
+    return sum(scores) / len(scores) if scores else 0.0
+
+@register_metric(
+    metric="bertscore",
+    higher_is_better=True,
+    output_type="generate_until",
+    aggregation="bertscore",
+)
+def bertscore_fn(items):
+    """
+    items: list of (reference, prediction) string tuples
+    returns: list of BERTScore F1 scores (normalized between 0–1)
+    """
     return items
