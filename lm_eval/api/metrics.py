@@ -658,3 +658,24 @@ def aggregate_subtask_metrics(metrics, sizes, weight_by_size=True):
     assert len(metrics) == len(sizes)
 
     return sum([metric * size for metric, size in zip(metrics, sizes)]) / sum(sizes)
+
+register_aggregation("fuzzy_match")
+def fuzzy_match_agg(items):
+    scores = []
+    for pred, ref in items:
+        if not isinstance(pred, str) or not isinstance(ref, str):
+            scores.append(0.0)
+            continue
+        score = token_sort_ratio(pred, ref) / 100.0
+        scores.append(score)
+    return np.mean(scores)
+
+@register_metric(
+    metric="fuzzy_match",
+    higher_is_better=True,
+    output_type="generate_until",
+    aggregation="fuzzy_match"
+)
+
+def fuzzy_match_fn(items):
+    return items
