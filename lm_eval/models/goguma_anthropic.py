@@ -73,10 +73,7 @@ class GogumaModelAPI(LocalCompletionsAPI):
         print('MESSAGE: ',messages)
         if messages:
             # Find the last user message
-            for msg in reversed(messages):
-                if msg.get("role") == "user":
-                    user_message = msg["content"]
-                    break
+            user_message = messages
         
         # Extract generation parameters if your API supports them
         # You may need to pass these in the context or remove them entirely

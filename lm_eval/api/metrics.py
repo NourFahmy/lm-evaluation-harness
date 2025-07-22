@@ -6,7 +6,7 @@ import string
 from collections.abc import Iterable
 from typing import List
 
-import numpy as np
+import numpy as npq
 import sacrebleu
 from rouge_score import rouge_scorer
 from rapidfuzz.fuzz import token_sort_ratio
@@ -662,7 +662,7 @@ def aggregate_subtask_metrics(metrics, sizes, weight_by_size=True):
 
     return sum([metric * size for metric, size in zip(metrics, sizes)]) / sum(sizes)
 
-register_aggregation("fuzzy_match")
+@register_aggregation("fuzzy_match")
 def fuzzy_match_agg(items):
     scores = []
     for pred, ref in items:
