@@ -5,6 +5,10 @@ import random
 import time
 from collections import defaultdict
 from typing import TYPE_CHECKING, List, Optional, Union
+import csv
+import os
+from datetime import datetime
+
 
 import numpy as np
 import torch
@@ -400,6 +404,68 @@ def simple_evaluate(
     else:
         return None
 
+# Add these helper functions at the top of your file
+def setup_csv_logger(lm, output_dir="eval_logs", filename_prefix="lm_eval"):
+    """Setup CSV file for logging LM evaluation results"""
+    os.makedirs(output_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Get model name for filename
+    #model_name = getattr(lm, 'model_name', getattr(lm, '_model_name', 'unknown_model'))
+    #model_name = model_name.replace('/', '_').replace('\\', '_')  # Clean filename
+    
+    csv_file = os.path.join(output_dir, f"{filename_prefix}_{timestamp}.csv")#f"{filename_prefix}_{model_name}_{timestamp}.csv")
+    
+    fieldnames = [
+        #'model_name', 
+        #'model_args', 
+        'task_name', 
+        'doc_id',
+        'question', 
+        'model_answer', 
+        'expected_answer',
+        'filter_key',
+        'prompt_hash',
+        'target_hash',
+        'request_type'
+    ]
+    
+    with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+    
+    return csv_file, fieldnames
+
+def extract_question_from_request(req, task):
+    """Extract the actual question/prompt from a request"""
+    try:
+        # The question is typically in req.args (the formatted prompt)
+        if hasattr(req, 'args') and len(req.args) > 0:
+            return str(req.args[0])  # Usually the first argument is the prompt
+        elif hasattr(req, 'doc') and hasattr(task, 'doc_to_text'):
+            # Fallback: try to get question from the document
+            return str(task.doc_to_text(req.doc))
+        else:
+            return "Unknown question format"
+    except Exception as e:
+        return f"Error extracting question: {str(e)}"
+
+def extract_model_answer(resps, filtered_resps, filter_key):
+    """Extract the model's answer from responses"""
+    try:
+        if filter_key in filtered_resps:
+            # Use filtered response if available
+            filtered_resp = filtered_resps[filter_key]
+            if isinstance(filtered_resp, list) and len(filtered_resp) > 0:
+                return str(filtered_resp[0])
+            return str(filtered_resp)
+        elif resps and len(resps) > 0:
+            # Fallback to raw response
+            return str(resps[0])
+        else:
+            return "No response"
+    except Exception as e:
+        return f"Error extracting answer: {str(e)}"
 
 @positional_deprecated
 def evaluate(
@@ -465,6 +531,17 @@ def evaluate(
         eval_logger.warning(
             "Chat template formatting change affects loglikelihood and multiple-choice tasks. See docs/chat-template-readme.md for details."
         )
+    # Initialize CSV logging
+    csv_file = None
+    csv_fieldnames = None
+    if log_samples:
+        csv_file, csv_fieldnames = setup_csv_logger(lm)
+        eval_logger.info(f"CSV logging enabled. Results will be saved to: {csv_file}")
+        
+        # Extract model information once
+        model_name = 'test_model'#getattr(lm, 'model_name', getattr(lm, '_model_name', 'unknown_model'))
+        model_args = 'test_model_args'#getattr(lm, 'model_args', getattr(lm, '_model_args', {}))
+        model_args_str = str(model_args) if model_args else ""
     # tracks all Instances/requests a model must generate output on.
     requests = defaultdict(list)
     # stores the amount to pad out reqs per req. type so that
@@ -704,6 +781,40 @@ def evaluate(
                 )
                 if log_samples:
                     target = task.doc_to_target(doc)
+                    # Enhanced CSV logging - log each request separately
+                    if csv_file and RANK == 0:  # Only rank 0 writes to avoid duplicates
+                        for req_idx, req in enumerate(requests):
+                            # Extract question and answers
+                            question = extract_question_from_request(req, task)
+                            model_answer = extract_model_answer(
+                                req.resps, 
+                                req.filtered_resps, 
+                                filter_key
+                            )
+                            expected_answer = str(target)
+                            
+                            # Create CSV row
+                            csv_row = {
+                                #'model_name': model_name,
+                                #'model_args': model_args_str,
+                                'task_name': task_output.task_name,
+                                'doc_id': doc_id_true,
+                                'question': question,
+                                'model_answer': model_answer,
+                                'expected_answer': expected_answer,
+                                'filter_key': filter_key,
+                                'prompt_hash': hash_string(req.arguments[0]) if hasattr(req, 'arguments') and req.arguments else "",
+                                'target_hash': hash_string(str(target)),
+                                'request_type': getattr(req, 'request_type', 'unknown')
+                            }
+                            
+                            # Write to CSV
+                            try:
+                                with open(csv_file, 'a', newline='', encoding='utf-8') as f:
+                                    writer = csv.DictWriter(f, fieldnames=csv_fieldnames)
+                                    writer.writerow(csv_row)
+                            except Exception as e:
+                                eval_logger.warning(f"Failed to write CSV row: {e}")
                     example = {
                         "doc_id": doc_id_true,
                         "doc": doc,

@@ -2,6 +2,7 @@ import logging
 import os
 from functools import cached_property
 from typing import Any, Dict, List, Tuple, Union
+from dotenv import load_dotenv
 
 from tqdm import tqdm
 
@@ -12,7 +13,7 @@ from lm_eval.models.utils import handle_stop_sequences, retry_on_specific_except
 
 
 eval_logger = logging.getLogger(__name__)
-
+load_dotenv()
 
 
 
@@ -20,7 +21,7 @@ eval_logger = logging.getLogger(__name__)
 class GogumaModelAPI(LocalCompletionsAPI):
     def __init__(
         self,
-        base_url="https://brain.goguma.io/docs/api/chat",  # Replace with your actual endpoint
+        base_url=os.getenv('GOGUMA_MODEL_API_ENDPOINT'),  # Replace with your actual endpoint
         tokenizer_backend=None,
         **kwargs,
     ):
