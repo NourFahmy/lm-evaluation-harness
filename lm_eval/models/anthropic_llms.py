@@ -1,7 +1,10 @@
 import logging
 import os
-from functools import cached_property
+from functools import cached_property, wraps
 from typing import Any, Dict, List, Tuple, Union
+import time
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
+import requests
 
 from tqdm import tqdm
 
@@ -273,6 +276,7 @@ please install anthropic via `pip install 'lm-eval[anthropic]'` or `pip install 
         raise NotImplementedError("No support for logits.")
 
 
+
 @register_model("anthropic-chat", "anthropic-chat-completions")
 class AnthropicChat(LocalCompletionsAPI):
     def __init__(
@@ -284,6 +288,9 @@ class AnthropicChat(LocalCompletionsAPI):
         super().__init__(
             base_url=base_url, tokenizer_backend=tokenizer_backend, **kwargs
         )
+        eval_logger.info(
+            "entered updated anthropic chat api."
+        )
         eval_logger.warning(
             "Chat completions does not support batching. Defaulting to batch size 1."
         )
@@ -292,6 +299,49 @@ class AnthropicChat(LocalCompletionsAPI):
         eval_logger.warning(
             f"Using Anthropic Version: {self.anthropic_version}. Confirm the current version here: https://docs.anthropic.com/en/api/versioning"
         )
+        self._last_request_time = 0
+        self._min_interval = 20  # seconds (3 requests/min = 20s/request)
+
+    @retry(
+        retry=retry_if_exception_type(requests.exceptions.RequestException),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        stop=stop_after_attempt(5),
+        reraise=True,
+    )
+    def model_call(self, messages, *, generate=True, gen_kwargs=None, **kwargs):
+        # Rate limiting logic
+        now = time.time()
+        elapsed = now - self._last_request_time
+        if elapsed < self._min_interval:
+            sleep_time = self._min_interval - elapsed
+            eval_logger.info(f"Sleeping for {sleep_time:.2f} seconds to respect rate limit")
+            time.sleep(sleep_time)
+
+        payload = self._create_payload(
+            self.create_message(messages),
+            generate=generate,
+            gen_kwargs=gen_kwargs,
+            seed=self._seed,
+            eos=self.eos_string,
+            **kwargs,
+        )
+        eval_logger.info(f"Sending request to {self.base_url} with payload keys: {list(payload.keys())}")
+
+        response = requests.post(
+            self.base_url,
+            json=payload,
+            headers=self.header,
+            verify=self.verify_certificate,
+            timeout=self.timeout,
+        )
+        if not response.ok:
+            eval_logger.warning(f"API request failed ({response.status_code}): {response.text}")
+            response.raise_for_status()
+
+        # Update last request time only if success
+        self._last_request_time = time.time()
+
+        return response.json()
 
     @cached_property
     def api_key(self):
