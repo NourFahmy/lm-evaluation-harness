@@ -27,6 +27,55 @@ def normalize_text(text: str, ignore_case=True, ignore_punctuation=True, do_stri
         text = re.sub(f"[{re.escape(string.punctuation)}]", "", text)
     return text
 
+@register_aggregation("bleu_sentence")
+def bleu_sentence(items):
+    scores = []
+    for ref, pred in items:
+        ref = normalize_text(ref)
+        pred = normalize_text(pred)
+        if ref.strip() == "" or pred.strip() == "":
+            continue  # or log a warning
+        score = sacrebleu.sentence_bleu(pred, [ref]).score
+        scores.append(score)
+    return np.mean(scores) / 100 if scores else 0.0
+
+@register_metric(
+    metric="bleu_sentence",
+    higher_is_better=True,
+    output_type="generate_until",
+    aggregation="bleu_sentence",
+)
+def bleu_sentence_fn(items):  # This is a passthrough function
+    return items
+
+@register_aggregation("bleu_corpus")
+def bleu_corpus_agg(items):
+    """The Bilingual Evaluation Understudy Score, or BLEU for short, is a metric
+    for evaluating a generated sentence to a reference sentence. It counts matching
+    n-grams in the candidate translation to n-grams in the reference text, where
+    1-gram or unigram would be each token and a bigram comparison would be each
+    word pair. The comparison is made regardless of word order
+    Source: https://machinelearningmastery.com/calculate-bleu-score-for-text-python/
+    Paper: https://www.aclweb.org/anthology/P02-1040/
+
+    Higher is better
+    """
+    refs = [normalize_text(r) for r, _ in items]
+    preds = [normalize_text(p) for _, p in items]
+    
+    # Wrap refs as list-of-lists for sacrebleu
+    refs, preds = _sacreformat(refs, preds)
+    return sacrebleu.corpus_bleu(preds, refs).score / 100
+
+@register_metric(
+    metric="bleu_corpus",
+    higher_is_better=True,
+    output_type="generate_until",
+    aggregation="bleu_corpus",
+)
+def bleu_corpus_fn(items):  # This is a passthrough function
+    return items
+
 @register_aggregation("rouge1")
 def rouge1_agg(items):
     scorer = rouge_scorer.RougeScorer(['rouge1'], use_stemmer=True)
@@ -168,11 +217,12 @@ def bleu(items):
 
     Higher is better
     """
-    refs = [normalize_text(r) for r, _ in items]
+    refs = [[normalize_text(r)] for r, _ in items]
     preds = [normalize_text(p) for _, p in items]
-    
+    print(f"---REF NORM: ",refs)
+    print(f'---PRED NORM: ', preds)
     # Wrap refs as list-of-lists for sacrebleu
-    refs, preds = _sacreformat(refs, preds)
+    #refs, preds = _sacreformat(refs, preds)
     return sacrebleu.corpus_bleu(preds, refs).score 
 
 
@@ -733,3 +783,4 @@ def bertscore_fn(items):
     returns: list of BERTScore F1 scores (normalized between 0–1)
     """
     return items
+
