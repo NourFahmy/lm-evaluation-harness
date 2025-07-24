@@ -18,10 +18,25 @@ from lm_eval.api.registry import register_aggregation, register_metric
 
 eval_logger = logging.getLogger(__name__)
 
+def normalize_text(text: str, ignore_case=True, ignore_punctuation=True, do_strip=True) -> str:
+    if do_strip:
+        text = text.strip()
+    if ignore_case:
+        text = text.lower()
+    if ignore_punctuation:
+        text = re.sub(f"[{re.escape(string.punctuation)}]", "", text)
+    return text
+
 @register_aggregation("rouge1")
 def rouge1_agg(items):
     scorer = rouge_scorer.RougeScorer(['rouge1'], use_stemmer=True)
-    scores = [scorer.score(ref, pred)['rouge1'].fmeasure for ref, pred in items]
+
+    scores = []
+    for ref, pred in items:
+        ref_norm = normalize_text(ref)
+        pred_norm = normalize_text(pred)
+        score = scorer.score(ref_norm, pred_norm)['rouge1'].fmeasure
+        scores.append(score)
     return np.mean(scores)
 
 @register_metric(
@@ -38,7 +53,13 @@ def rouge1_fn(items):
 @register_aggregation("rouge2")
 def rouge2_agg(items):
     scorer = rouge_scorer.RougeScorer(['rouge2'], use_stemmer=True)
-    scores = [scorer.score(ref, pred)['rouge2'].fmeasure for ref, pred in items]
+
+    scores = []
+    for ref, pred in items:
+        ref_norm = normalize_text(ref)
+        pred_norm = normalize_text(pred)
+        score = scorer.score(ref_norm, pred_norm)['rouge2'].fmeasure
+        scores.append(score)
     return np.mean(scores)
 
 @register_metric(
@@ -54,7 +75,13 @@ def rouge2_fn(items):
 @register_aggregation("rougeL")
 def rougeL_agg(items):
     scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
-    scores = [scorer.score(ref, pred)['rougeL'].fmeasure for ref, pred in items]
+
+    scores = []
+    for ref, pred in items:
+        ref_norm = normalize_text(ref)
+        pred_norm = normalize_text(pred)
+        score = scorer.score(ref_norm, pred_norm)['rougeL'].fmeasure
+        scores.append(score)
     return np.mean(scores)
 
 @register_metric(
@@ -141,10 +168,12 @@ def bleu(items):
 
     Higher is better
     """
-    refs = list(zip(*items))[0]
-    preds = list(zip(*items))[1]
+    refs = [normalize_text(r) for r, _ in items]
+    preds = [normalize_text(p) for _, p in items]
+    
+    # Wrap refs as list-of-lists for sacrebleu
     refs, preds = _sacreformat(refs, preds)
-    return sacrebleu.corpus_bleu(preds, refs).score
+    return sacrebleu.corpus_bleu(preds, refs).score 
 
 
 @register_aggregation("chrf")
@@ -666,6 +695,8 @@ def aggregate_subtask_metrics(metrics, sizes, weight_by_size=True):
 def fuzzy_match_agg(items):
     scores = []
     for pred, ref in items:
+        pred = normalize_text(pred)
+        ref = normalize_text(ref)
         if not isinstance(pred, str) or not isinstance(ref, str):
             scores.append(0.0)
             continue
