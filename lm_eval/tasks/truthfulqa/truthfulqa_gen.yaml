@@ -76,6 +76,29 @@ metric_list:
   - metric: rougeL_diff
     aggregation: mean
     higher_is_better: true
+  - metric: bertscore_max
+    aggregation: mean
+    higher_is_better: true
+  - metric: bertscore_mean
+    aggregation: mean
+    higher_is_better: true
+  - metric: bertscore_diff
+    aggregation: mean
+    higher_is_better: true
+  - metric: bertscore_acc
+    aggregation: mean
+    higher_is_better: true
+  - metric: fuzz_ratio_max
+    aggregation: mean
+    higher_is_better: true
+  - metric: fuzz_ratio_mean
+    aggregation: mean
+    higher_is_better: true
+  - metric: fuzz_ratio_diff
+    aggregation: mean
+    higher_is_better: true
+  - metric: fuzz_ratio_acc
+    aggregation: mean
+    higher_is_better: true
 metadata:
   version: 3.0
-  

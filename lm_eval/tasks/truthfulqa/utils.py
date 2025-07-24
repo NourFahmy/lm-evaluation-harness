@@ -2,6 +2,9 @@ import datasets
 import numpy as np
 import sacrebleu
 from rouge_score import rouge_scorer, scoring
+from bert_score import score as bert_score
+import torch
+from rapidfuzz.fuzz import token_sort_ratio
 
 
 ROUGE_SCORER = None
@@ -104,6 +107,19 @@ def process_results_gen(doc, results):
     rougeL_diff = rougeL_correct - rougeL_incorrect
     rougeL_acc = int(rougeL_correct > rougeL_incorrect)
 
+    # BERTScore
+    bert_true = compute_bertscore(completion, true_refs)
+    bert_false = compute_bertscore(completion, false_refs)
+    bert_acc = int(bert_true["bertscore_max"] > bert_false["bertscore_max"])
+    bert_diff = bert_true["bertscore_max"] - bert_false["bertscore_max"]
+
+    # Fuzzy matching
+    fuzz_true = compute_fuzzy_scores(completion, true_refs)
+    fuzz_false = compute_fuzzy_scores(completion, false_refs)
+    fuzz_acc = int(fuzz_true["fuzz_ratio_max"] > fuzz_false["fuzz_ratio_max"])
+    fuzz_diff = fuzz_true["fuzz_ratio_max"] - fuzz_false["fuzz_ratio_max"]
+
+
     return {
         # "bleurt_max": bleurt_max,
         # "bleurt_acc": bleurt_acc,
@@ -120,6 +136,14 @@ def process_results_gen(doc, results):
         "rougeL_max": rougeL_max,
         "rougeL_acc": rougeL_acc,
         "rougeL_diff": rougeL_diff,
+        "bertscore_max": bert_true["bertscore_max"],
+        "bertscore_mean": bert_true["bertscore_mean"],
+        "bertscore_diff": bert_diff,
+        "bertscore_acc": bert_acc,
+        "fuzz_ratio_max": fuzz_true["fuzz_ratio_max"],
+        "fuzz_ratio_mean": fuzz_true["fuzz_ratio_mean"],
+        "fuzz_ratio_diff": fuzz_diff,
+        "fuzz_ratio_acc": fuzz_acc
     }
 
 
@@ -178,3 +202,31 @@ def rouge(refs, preds):
         aggregator.add_scores(scorer.score(ref, pred))
     result = aggregator.aggregate()
     return {type: result[type].mid.fmeasure * 100 for type in rouge_types}
+
+def compute_bertscore(pred, refs, lang="en"):
+    """
+    Computes BERTScore (F1) between a prediction and a list of references.
+    Returns max and mean scores across all refs.
+    """
+    P, R, F1 = bert_score(
+        cands=[pred] * len(refs),
+        refs=refs,
+        lang=lang,
+        rescale_with_baseline=True,
+        verbose=False,
+    )
+    return {
+        "bertscore_max": float(torch.max(F1)),
+        "bertscore_mean": float(torch.mean(F1)),
+    }
+
+def compute_fuzzy_scores(pred, refs):
+    """
+    Computes fuzzy string matching scores using RapidFuzz's token_sort_ratio.
+    Returns max and mean scores across all refs.
+    """
+    scores = [token_sort_ratio(pred, ref) for ref in refs]
+    return {
+        "fuzz_ratio_max": float(np.max(scores)),
+        "fuzz_ratio_mean": float(np.mean(scores)),
+    }
