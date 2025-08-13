@@ -293,4 +293,8 @@ class OpenAIChatCompletion(LocalChatCompletion):
             output["temperature"] = 1
         elif "o3" in self.model:
             output.pop("temperature")
+        elif '5' in self.model:
+            output.pop("stop")
+            output.pop('max_completion_tokens')
+            output["temperature"] = 1
         return output
