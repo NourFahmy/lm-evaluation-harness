@@ -309,39 +309,67 @@ class AnthropicChat(LocalCompletionsAPI):
         reraise=True,
     )
     def model_call(self, messages, *, generate=True, gen_kwargs=None, **kwargs):
-        # Rate limiting logic
-        now = time.time()
-        elapsed = now - self._last_request_time
-        if elapsed < self._min_interval:
-            sleep_time = self._min_interval - elapsed
-            eval_logger.info(f"Sleeping for {sleep_time:.2f} seconds to respect rate limit")
-            time.sleep(sleep_time)
+      MAX_RETRIES = 5
+      BASE_WAIT = 20  # seconds
+      MAX_WAIT = 60   # cap the wait time
 
-        payload = self._create_payload(
-            self.create_message(messages),
-            generate=generate,
-            gen_kwargs=gen_kwargs,
-            seed=self._seed,
-            eos=self.eos_string,
-            **kwargs,
-        )
-        eval_logger.info(f"Sending request to {self.base_url} with payload keys: {list(payload.keys())}")
+      retries = 0
+      total_wait = 0
+      start_time = time.time()
 
-        response = requests.post(
-            self.base_url,
-            json=payload,
-            headers=self.header,
-            verify=self.verify_certificate,
-            timeout=self.timeout,
-        )
-        if not response.ok:
-            eval_logger.warning(f"API request failed ({response.status_code}): {response.text}")
-            response.raise_for_status()
+      # Respect rate limit
+      now = time.time()
+      elapsed = now - self._last_request_time
+      if elapsed < self._min_interval:
+          sleep_time = self._min_interval - elapsed
+          eval_logger.info(f"Sleeping for {sleep_time:.2f}s to respect rate limit")
+          time.sleep(sleep_time)
+          total_wait_time += sleep_time
 
-        # Update last request time only if success
-        self._last_request_time = time.time()
+      while retries < MAX_RETRIES:
+          try:
+              payload = self._create_payload(
+                  self.create_message(messages),
+                  generate=generate,
+                  gen_kwargs=gen_kwargs,
+                  seed=self._seed,
+                  eos=self.eos_string,
+                  **kwargs,
+              )
 
-        return response.json()
+              response = requests.post(
+                  self.base_url,
+                  json=payload,
+                  headers=self.header,
+                  verify=self.verify_certificate,
+                  timeout=self.timeout,
+              )
+
+              if not response.ok:
+                  logging.warning(f"API request failed ({response.status_code}): {response.text}")
+                  response.raise_for_status()
+
+              response.raise_for_status()
+              self._last_request_time = time.time()
+              duration = self._last_request_time - start_time
+              efficiency_stats = {
+                  "retry_count": retries,
+                  "total_wait_time": total_wait,
+                  "request_duration": duration,
+              }
+              return {
+                  "response": response.json(),
+                  "efficiency_stats": efficiency_stats,
+              }
+
+          except requests.exceptions.RequestException as e:
+              wait_time = min(BASE_WAIT * (2 ** retries), MAX_WAIT)
+              logging.warning(f"Request failed: {e}. Retrying in {wait_time}s...")
+              time.sleep(wait_time)
+              total_wait += wait_time
+              retries += 1
+
+      raise RuntimeError(f"Failed after {MAX_RETRIES} retries and {total_wait:.1f}s of wait.")
 
     @cached_property
     def api_key(self):
@@ -406,16 +434,33 @@ class AnthropicChat(LocalCompletionsAPI):
             out["system"] = system
         return out
 
-    def parse_generations(
-        self, outputs: Union[Dict, List[Dict]], **kwargs
-    ) -> List[str]:
-        res = []
-        if not isinstance(outputs, list):
-            outputs = [outputs]
-        for out in outputs:
-            for choices in out["content"]:
-                res.append(choices["text"])
-        return res
+    def parse_generations(self, outputs: Union[Dict, List[Dict]], **kwargs) -> List[str]:
+      generations = []
+
+      print('===[DEBUG] PARSE GENERATIONS: ', outputs)
+
+      #if not isinstance(outputs, list):
+          #outputs = [outputs]
+
+      for out in outputs:
+          #if not isinstance(out, dict) or "response" not in out:
+              #eval_logger.warning(f"Malformed output: {out}")
+              #continue
+
+          #response = out["response"]
+          content = outputs.get("content", []) # response.get("content",[])
+
+          if isinstance(content, list):
+              for item in content:
+                  text = item.get("text")
+                  if text:
+                      generations.append(text)
+          elif isinstance(content, str):
+              generations.append(content)
+          else:
+              eval_logger.warning(f"Unexpected content format: {content}")
+
+      return generations
 
     def tok_encode(
         self,

@@ -628,138 +628,156 @@ class TemplateAPI(TemplateLM):
         return re_ord.get_original(res)
 
     def generate_until(
-        self, requests: List[Instance], disable_tqdm: bool = False
-    ) -> List[str]:
-        res = []
+            self, requests: List[Instance], disable_tqdm: bool = False
+        ) -> List[str]:
+            res = []
 
-        def _collate_gen(_requests):
-            # sort by the length of the non-tokenized contexts
-            return -len(_requests[0])
+            def _collate_gen(_requests):
+                # sort by the length of the non-tokenized contexts
+                return -len(_requests[0])
 
-        # Let the API deal with tokenization
-        if len(requests[0].args) > 2:
-            assert self.tokenizer is None, (
-                "tokenizer is not supported for multimodal requests yet!"
-            )
-            eval_logger.info(
-                f"Using max_images {self.max_images}. Set in the model args."
-            )
-            requests, all_gen_kwargs, auxiliary_args = zip(
-                *(req.args for req in requests)
-            )
-            requests = tuple(
-                JsonChatStr(
-                    json.dumps(
-                        create_image_prompt(
-                            y["visual"][: self.max_images], json.loads(x.prompt)
-                        )
-                    )
+            # Let the API deal with tokenization
+            if len(requests[0].args) > 2:
+                assert self.tokenizer is None, (
+                    "tokenizer is not supported for multimodal requests yet!"
                 )
-                for x, y in zip(requests, auxiliary_args)
-            )
-        else:
-            requests, all_gen_kwargs = zip(*(req.args for req in requests))
-        if self.tokenized_requests:
-            encodings_list = self.tok_encode(
-                requests, add_special_tokens=self.add_bos_token
-            )
-        else:
-            encodings_list = [None] * len(requests)
-        requests = [
-            (a, b, c) for a, b, c in zip(requests, all_gen_kwargs, encodings_list)
-        ]
-
-        re_ord = Collator(
-            requests,
-            sort_fn=_collate_gen,
-            group_by="gen_kwargs",
-        )
-        chunked = re_ord.get_batched(
-            n=self._batch_size if self._concurrent <= 1 else 0, batch_fn=None
-        )
-        if not self.tokenized_requests:
-            eval_logger.info(
-                "Tokenized requests are disabled. Context + generation length is not checked."
-            )
-        if self._concurrent <= 1:
-            pbar = tqdm(desc="Requesting API", total=len(requests))
-            for chunk in chunked:
-                contexts, all_gen_kwargs, encodings_list = zip(*chunk)
-                if self.tokenized_requests:
-                    max_gen_toks = all_gen_kwargs[0].get(
-                        "max_gen_toks", self._max_gen_toks
-                    )
-                    max_context_len = self.max_length - max_gen_toks
-
-                    encodings_list = [x[-max_context_len:] for x in encodings_list]
-
-                    if any(
-                        len(x) + max_gen_toks > self.max_length for x in encodings_list
-                    ):
-                        eval_logger.warning(
-                            f"Some contexts exceeded (max length: ({self.max_length}) - max_gen_toks: ({max_gen_toks}). They were left truncated."
-                        )
-
-                req = encodings_list if self.tokenized_requests else contexts
-                outputs = retry(
-                    stop=stop_after_attempt(self.max_retries),
-                    wait=wait_exponential(multiplier=0.5, min=1, max=10),
-                    reraise=True,
-                )(self.model_call)(
-                    messages=req,
-                    generate=True,
-                    gen_kwargs=copy.deepcopy(all_gen_kwargs[0]),
+                eval_logger.info(
+                    f"Using max_images {self.max_images}. Set in the model args."
                 )
-                for generated_text, context in zip(
-                    self.parse_generations(
-                        outputs=outputs,
-                        contexts=contexts,
-                    ),
-                    contexts,
-                ):
-                    if generated_text is not None:
-                        res.append(generated_text)
-
-                        # partial caching
-                        if context is not None:
-                            self.cache_hook.add_partial(
-                                "generate_until",
-                                (context, all_gen_kwargs[0]),
-                                generated_text,
+                requests, all_gen_kwargs, auxiliary_args = zip(
+                    *(req.args for req in requests)
+                )
+                requests = tuple(
+                    JsonChatStr(
+                        json.dumps(
+                            create_image_prompt(
+                                y["visual"][: self.max_images], json.loads(x.prompt)
                             )
-                            pbar.update(1)
-        else:
-            for chunk in chunked:
-                contexts, all_gen_kwargs, encodings_list = zip(*chunk)
-                if self.tokenized_requests:
-                    max_gen_toks = all_gen_kwargs[0].get(
-                        "max_gen_toks", self._max_gen_toks
-                    )
-                    max_context_len = self.max_length - max_gen_toks
-
-                    encodings_list = [x[-max_context_len:] for x in encodings_list]
-
-                    if any(
-                        len(x) + max_gen_toks > self.max_length for x in encodings_list
-                    ):
-                        eval_logger.warning(
-                            f"Some contexts exceeded (max length: ({self.max_length}) - max_gen_toks ({max_gen_toks}). They were left truncated."
-                        )
-
-                req = encodings_list if self.tokenized_requests else contexts
-                results = itertools.chain.from_iterable(
-                    asyncio.run(
-                        self.get_batched_requests(
-                            req,
-                            cache_keys=[(ctx, all_gen_kwargs[0]) for ctx in contexts],
-                            generate=True,
-                            gen_kwargs=copy.deepcopy(all_gen_kwargs[0]),
                         )
                     )
+                    for x, y in zip(requests, auxiliary_args)
                 )
-                res.extend(results)
+            else:
+                requests, all_gen_kwargs = zip(*(req.args for req in requests))
+            if self.tokenized_requests:
+                encodings_list = self.tok_encode(
+                    requests, add_special_tokens=self.add_bos_token
+                )
+            else:
+                encodings_list = [None] * len(requests)
+            requests = [
+                (a, b, c) for a, b, c in zip(requests, all_gen_kwargs, encodings_list)
+            ]
 
-        return re_ord.get_original(res)
+            re_ord = Collator(
+                requests,
+                sort_fn=_collate_gen,
+                group_by="gen_kwargs",
+            )
+            chunked = re_ord.get_batched(
+                n=self._batch_size if self._concurrent <= 1 else 0, batch_fn=None
+            )
+            if not self.tokenized_requests:
+                eval_logger.info(
+                    "Tokenized requests are disabled. Context + generation length is not checked."
+                )
+            if self._concurrent <= 1:
+                pbar = tqdm(desc="Requesting API", total=len(requests))
+                for chunk in chunked:
+                    contexts, all_gen_kwargs, encodings_list = zip(*chunk)
+                    if self.tokenized_requests:
+                        max_gen_toks = all_gen_kwargs[0].get(
+                            "max_gen_toks", self._max_gen_toks
+                        )
+                        max_context_len = self.max_length - max_gen_toks
+
+                        encodings_list = [x[-max_context_len:] for x in encodings_list]
+
+                        if any(
+                            len(x) + max_gen_toks > self.max_length for x in encodings_list
+                        ):
+                            eval_logger.warning(
+                                f"Some contexts exceeded (max length: ({self.max_length}) - max_gen_toks: ({max_gen_toks}). They were left truncated."
+                            )
+
+                    req = encodings_list if self.tokenized_requests else contexts
+                    outputs = retry(
+                        stop=stop_after_attempt(self.max_retries),
+                        wait=wait_exponential(multiplier=0.5, min=1, max=10),
+                        reraise=True,
+                    )(self.model_call)(
+                        messages=req,
+                        generate=True,
+                        gen_kwargs=copy.deepcopy(all_gen_kwargs[0]),
+                    )
+                    
+                    if not isinstance(outputs, list):
+                        outputs = [outputs]
+
+                    print("[DEBUG] outputs: ",outputs)
+                    for raw_output, context in zip(outputs, contexts):
+              
+                      print("[DEBUG] raw_output:", raw_output['response'])
+                      print("[DEBUG] context:", context)
+                      # Handle structured response
+                      if isinstance(raw_output, dict) and "response" in raw_output and "efficiency_stats" in raw_output:
+                          parsed = self.parse_generations(raw_output["response"], contexts=[context])
+                          print("[DEBUG] PARSED: ",parsed)
+                          if not parsed:
+                              continue  # skip or handle empty case as you prefer
+                          parsed_text = parsed[0]
+                          res.append({
+                              "response": parsed_text,
+                              "efficiency_stats": raw_output["efficiency_stats"],
+                          })
+                      else:
+                          parsed = self.parse_generations([raw_output], contexts=[context])
+                          if not parsed:
+                              continue
+                          parsed_text = parsed[0]
+                          res.append(parsed_text)
+
+                      # partial caching
+                      if context is not None:
+                          self.cache_hook.add_partial(
+                              "generate_until",
+                              (context, all_gen_kwargs[0]),
+                              parsed_text,
+                          )
+                          if self._concurrent <= 1:
+                              pbar.update(1)
+            else:
+                for chunk in chunked:
+                    contexts, all_gen_kwargs, encodings_list = zip(*chunk)
+                    if self.tokenized_requests:
+                        max_gen_toks = all_gen_kwargs[0].get(
+                            "max_gen_toks", self._max_gen_toks
+                        )
+                        max_context_len = self.max_length - max_gen_toks
+
+                        encodings_list = [x[-max_context_len:] for x in encodings_list]
+
+                        if any(
+                            len(x) + max_gen_toks > self.max_length for x in encodings_list
+                        ):
+                            eval_logger.warning(
+                                f"Some contexts exceeded (max length: ({self.max_length}) - max_gen_toks ({max_gen_toks}). They were left truncated."
+                            )
+
+                    req = encodings_list if self.tokenized_requests else contexts
+                    results = itertools.chain.from_iterable(
+                        asyncio.run(
+                            self.get_batched_requests(
+                                req,
+                                cache_keys=[(ctx, all_gen_kwargs[0]) for ctx in contexts],
+                                generate=True,
+                                gen_kwargs=copy.deepcopy(all_gen_kwargs[0]),
+                            )
+                        )
+                    )
+                    res.extend(results)
+
+            return re_ord.get_original(res)
 
     def loglikelihood_rolling(
         self, requests: List[Instance], disable_tqdm: bool = False
