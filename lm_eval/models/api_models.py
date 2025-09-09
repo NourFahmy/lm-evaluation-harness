@@ -714,15 +714,10 @@ class TemplateAPI(TemplateLM):
                     if not isinstance(outputs, list):
                         outputs = [outputs]
 
-                    print("[DEBUG] outputs: ",outputs)
                     for raw_output, context in zip(outputs, contexts):
-              
-                      print("[DEBUG] raw_output:", raw_output['response'])
-                      print("[DEBUG] context:", context)
                       # Handle structured response
                       if isinstance(raw_output, dict) and "response" in raw_output and "efficiency_stats" in raw_output:
                           parsed = self.parse_generations(raw_output["response"], contexts=[context])
-                          print("[DEBUG] PARSED: ",parsed)
                           if not parsed:
                               continue  # skip or handle empty case as you prefer
                           parsed_text = parsed[0]
