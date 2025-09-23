@@ -2,7 +2,10 @@ import logging
 import os
 from functools import cached_property
 from typing import Any, Dict, List, Tuple, Union
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 from dotenv import load_dotenv
+import time
+import requests
 
 from tqdm import tqdm
 
@@ -35,7 +38,76 @@ class GogumaModelAPI(LocalCompletionsAPI):
         eval_logger.warning(
             "Custom model API does not support loglikelihoods."
         )
-    
+        self._last_request_time = 0
+        self._min_interval = 20  # seconds (3 requests/min = 20s/request)
+
+    @retry(
+        retry=retry_if_exception_type(requests.exceptions.RequestException),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        stop=stop_after_attempt(5),
+        reraise=True,
+    )  
+    def model_call(self, messages, *, generate=True, gen_kwargs=None, **kwargs):
+      MAX_RETRIES = 5
+      BASE_WAIT = 1  # seconds
+      MAX_WAIT = 60   # cap the wait time
+
+      retries = 0
+      total_wait = 0
+      start_time = time.time()
+
+      # Respect rate limit
+      now = time.time()
+      elapsed = now - self._last_request_time
+      if elapsed < self._min_interval:
+          sleep_time = self._min_interval - elapsed
+          eval_logger.info(f"Sleeping for {sleep_time:.2f}s to respect rate limit")
+          time.sleep(sleep_time)
+          total_wait_time += sleep_time
+
+      while retries < MAX_RETRIES:
+          try:
+              payload = self._create_payload(
+                  self.create_message(messages),
+                  generate=generate,
+                  gen_kwargs=gen_kwargs,
+                  seed=self._seed,
+                  eos=self.eos_string,
+                  **kwargs,
+              )
+
+              response = requests.post(
+                  self.base_url,
+                  json=payload,
+                  headers=self.header,
+                  verify=self.verify_certificate,
+                  timeout=self.timeout,
+              )
+
+              if not response.ok:
+                  logging.warning(f"API request failed ({response.status_code}): {response.text}")
+                  response.raise_for_status()
+
+              response.raise_for_status()
+              print("RESPONSE: ",)
+              self._last_request_time = time.time()
+              duration = self._last_request_time - start_time
+              resp = response.json()
+              query_complexity = resp['metadata']['processing_path']
+              return {
+                  "response": response.json(),
+                  "query_complexity": query_complexity,
+              }
+
+          except requests.exceptions.RequestException as e:
+              wait_time = min(BASE_WAIT * (2 ** retries), MAX_WAIT)
+              logging.warning(f"Request failed: {e}. Retrying in {wait_time}s...")
+              time.sleep(wait_time)
+              total_wait += wait_time
+              retries += 1
+
+      raise RuntimeError(f"Failed after {MAX_RETRIES} retries and {total_wait:.1f}s of wait.")
+
     @cached_property
     def api_key(self):
         """Override this property to return the API key for your custom API."""

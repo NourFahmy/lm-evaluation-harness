@@ -725,6 +725,15 @@ class TemplateAPI(TemplateLM):
                               "response": parsed_text,
                               "efficiency_stats": raw_output["efficiency_stats"],
                           })
+                      elif isinstance(raw_output, dict) and "response" in raw_output and "query_complexity" in raw_output:
+                          parsed = self.parse_generations(raw_output["response"], contexts=[context])
+                          if not parsed:
+                              continue  # skip or handle empty case as you prefer
+                          parsed_text = parsed[0]
+                          res.append({
+                              "response": parsed_text,
+                              "query_complexity": raw_output["query_complexity"],
+                          })
                       else:
                           parsed = self.parse_generations([raw_output], contexts=[context])
                           if not parsed:
@@ -806,7 +815,3 @@ class TemplateAPI(TemplateLM):
 
             string_nll = sum(string_nll)
             loglikelihoods.append(string_nll)
-
-            # cache this loglikelihood_rolling request
-            self.cache_hook.add_partial("loglikelihood_rolling", (string,), string_nll)
-        return loglikelihoods

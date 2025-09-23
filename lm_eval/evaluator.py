@@ -795,6 +795,7 @@ def evaluate(
                         "arguments": [req.args for req in requests],
                         "resps": [req.resps for req in requests],
                         "efficiency_stats": [getattr(req, "efficiency_stats", None) for req in requests],
+                        "query_complexity": [getattr(req, "query_complexity", None) for req in requests],
                         "filtered_resps": [
                             req.filtered_resps[filter_key] for req in requests
                         ],
@@ -968,4 +969,5 @@ def request_caching_arg_to_dict(cache_requests: str) -> dict:
         "delete_requests_cache": cache_requests == "delete",
     }
 
+    return request_caching_args
     return request_caching_args
