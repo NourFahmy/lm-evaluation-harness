@@ -707,21 +707,25 @@ def evaluate(
         #resps = getattr(lm, reqtype)(cloned_reqs)
 
         try:
-          resps = getattr(lm, reqtype)(cloned_reqs)
-          print(f"[DEBUG] Got {len(resps)} responses from LM")
+            resps = getattr(lm, reqtype)(cloned_reqs)
+            print(f"[DEBUG] Got {len(resps)} responses from LM")
 
-          for i, (x, req) in enumerate(zip(resps, cloned_reqs)):
-              print(f"[DEBUG] Response {i}: {x}")
+            for i, (x, req) in enumerate(zip(resps, cloned_reqs)):
+                print(f"[DEBUG] Response {i}: {x}")
 
-              # If response is structured with 'response' and 'efficiency_stats', unpack
-              if isinstance(x, dict) and "response" in x and "efficiency_stats" in x:
-                  req.resps.append(x["response"])
-                  req.efficiency_stats = x["efficiency_stats"]
-              else:
-                  req.resps.append(x)
+                # If response is structured with 'response' and 'efficiency_stats', unpack
+                if isinstance(x, dict) and "response" in x and "efficiency_stats" in x:
+                    req.resps.append(x["response"])
+                    req.efficiency_stats = x["efficiency_stats"]
+                # patch fix: If response is structured with 'response' and 'query_complexity', unpack
+                if isinstance(x, dict) and "response" in x and "query_complexity" in x:
+                    req.resps.append(x["response"])
+                    req.query_complexity = x["query_complexity"]
+                else:
+                    req.resps.append(x)
 
-          if len(resps) != len(cloned_reqs):
-              print(f"[WARNING] Length mismatch: {len(resps)} responses vs {len(cloned_reqs)} requests")
+            if len(resps) != len(cloned_reqs):
+                print(f"[WARNING] Length mismatch: {len(resps)} responses vs {len(cloned_reqs)} requests")
 
         except Exception as e:
             print(f"[ERROR] Exception during model call: {e}")
@@ -969,5 +973,4 @@ def request_caching_arg_to_dict(cache_requests: str) -> dict:
         "delete_requests_cache": cache_requests == "delete",
     }
 
-    return request_caching_args
     return request_caching_args
