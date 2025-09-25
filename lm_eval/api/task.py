@@ -1722,6 +1722,12 @@ class ConfigurableTask(Task):
         elif self.OUTPUT_TYPE == "generate_until":
             gold = self.doc_to_target(doc)
             result = results[0]
+            if gold and result:
+              print(f'====[DEBUG GOLD TASK]==== type(gold) {type(gold)} {gold}')
+              print(f'====[DEBUG GOLD TASK]==== type(result) {type(result)} {result}')
+              if type(result) == dict: # quick fix for goguma endpoint
+                result = result['response']
+
             if self.config.doc_to_choice is not None:
                 # If you set doc_to_choice,
                 # it assumes that doc_to_target returns a number.
